@@ -269,6 +269,74 @@ def get_daily_basic(ts_code: str = None,
     else:
         raise ValueError("请至少提供 ts_code 或 trade_date 之一")
 
+# ========== 财务数据接口 ==========
+
+def get_fina_indicator(ts_code: str,
+                       start_date: str = "20180101",
+                       end_date: str = None,
+                       use_cache: bool = True) -> pd.DataFrame:
+    """
+    获取财务指标（pro.fina_indicator）
+    返回关键质量/成长因子：roe, roe_waa, grossprofit_margin, netprofit_yoy, or_yoy 等
+    """
+    if end_date is None:
+        end_date = pd.Timestamp.today().strftime("%Y%m%d")
+
+    cache_file = os.path.join(CACHE_DIR, f"fina_{ts_code}_{start_date}_{end_date}.csv")
+    if use_cache and os.path.exists(cache_file):
+        return pd.read_csv(cache_file)
+
+    frames = []
+    start_y = int(start_date[:4])
+    end_y = int(end_date[:4])
+    for y in range(start_y, end_y + 1):
+        sd = f"{y}0101" if y != start_y else start_date
+        ed = f"{y}1231" if y != end_y else end_date
+        try:
+            chunk = pro.fina_indicator(ts_code=ts_code,
+                                       start_date=sd, end_date=ed,
+                                       fields="ts_code,ann_date,end_date,roe,roe_waa,"
+                                              "grossprofit_margin,netprofit_margin,"
+                                              "netprofit_yoy,or_yoy,roa,debt_to_assets")
+        except Exception as e:
+            msg = str(e)
+            if "频率超限" in msg or "权限" in msg:
+                raise RuntimeError(f"⛔ fina_indicator 限流：{msg}")
+            raise
+        if chunk is not None and not chunk.empty:
+            frames.append(chunk)
+            time.sleep(0.3)
+
+    if not frames:
+        raise ValueError(f"未获取到财务数据：{ts_code}")
+
+    df = pd.concat(frames, ignore_index=True)
+    df = df.drop_duplicates(subset=["end_date"]).sort_values("end_date").reset_index(drop=True)
+    df.to_csv(cache_file, index=False)
+    return df
+
+
+def get_trade_calendar(start_date="20180101", end_date=None) -> pd.DataFrame:
+    """交易日历"""
+    if end_date is None:
+        end_date = pd.Timestamp.today().strftime("%Y%m%d")
+    cache_file = os.path.join(CACHE_DIR, f"cal_{start_date}_{end_date}.csv")
+    if os.path.exists(cache_file):
+        return pd.read_csv(cache_file)
+    df = pro.trade_cal(exchange="SSE", start_date=start_date, end_date=end_date)
+    df.to_csv(cache_file, index=False)
+    return df
+
+
+def get_stock_basic() -> pd.DataFrame:
+    """股票基础信息（含行业、上市日期）"""
+    cache_file = os.path.join(CACHE_DIR, "stock_basic.csv")
+    if os.path.exists(cache_file):
+        return pd.read_csv(cache_file)
+    df = pro.stock_basic(exchange="", list_status="L",
+                         fields="ts_code,symbol,name,area,industry,list_date")
+    df.to_csv(cache_file, index=False)
+    return df
 
 # ========== 测试 ==========
 if __name__ == "__main__":

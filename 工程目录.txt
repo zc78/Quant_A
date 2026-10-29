@@ -1,0 +1,9 @@
+Quant_A/
+├── data_source.py          # 已有，扩展财务接口
+├── market_filter.py        # 已有，第一阶段择时
+├── factors.py              # 因子计算（量价 + 基本面）
+├── factor_clean.py         # 去极值 / 标准化 / 中性化
+├── factor_test.py          # 单因子 IC 分析 + 分层回测
+├── factor_combine.py       # 多因子合成
+├── stock_select.py         # 选股 + 择时结合的最终策略
+└── data_cache/             # 缓存
