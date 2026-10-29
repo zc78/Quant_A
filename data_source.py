@@ -7,9 +7,16 @@
 import os, time
 import pandas as pd
 import tushare as ts
+from dotenv import load_dotenv
 
+load_dotenv()  # 自动加载根目录 .env
+
+TOKEN = os.getenv("TUSHARE_TOKEN")
+if not TOKEN:
+    raise ValueError("未找到 TUSHARE_TOKEN，请在 .env 文件中配置")
 # ========== 在这里填入你的 tushare token ==========
-TOKEN = "af89c496c7339c11d590ac4de481fc893bad61af13392c820a76f99d"
+# TOKEN = "1b3a3cb71245364240206d7c2c703d57e8925a72d7916596487fdd16"
+# Jeff =  "af89c496c7339c11d590ac4de481fc893bad61af13392c820a76f99d"
 # =================================================
 
 # tushare 初始化

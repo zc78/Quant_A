@@ -1,0 +1,16 @@
+# 密钥
+.env
+*.env
+.env.local
+
+# 数据缓存
+data_cache/
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# 编辑器
+.vscode/
+.idea/
