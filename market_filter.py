@@ -116,50 +116,40 @@ def backtest_with_filter(ts_code, start_date, end_date):
 def backtest_portfolio(ts_codes, start_date, end_date):
     """多标的等权组合回测"""
     all_returns = []
-    names = []
-    
+    bench_returns_list = []
+    valid_codes = []
+
     for code in ts_codes:
         print(f"正在处理 {code} ...")
         try:
-            df = _single_stock_backtest(code, start_date, end_date)
-            if df is not None and len(df) > 0:
-                all_returns.append(df.set_index('date')['strategy_return'])
-                names.append(code)
+            result = _single_stock_backtest(code, start_date, end_date)
+            if result is not None and len(result) > 0:
+                all_returns.append(result.set_index('date')['strategy_return'])
+                bench_returns_list.append(result.set_index('date')['daily_return'])
+                valid_codes.append(code)
         except Exception as e:
             print(f"  {code} 处理失败: {e}")
-    
+
     if not all_returns:
         print("没有成功回测的标的")
         return
-    
-    # 合并所有收益率序列（按日期对齐）
-    port_returns = pd.concat(all_returns, axis=1, keys=names)
-    port_returns = port_returns.mean(axis=1)  # 等权
-    
-    # 基准：等权持有所有标的
-    bench_returns = []
-    for code in ts_codes:
-        df = get_daily(ts_code=code, start_date=start_date, end_date=end_date)
-        df['date'] = pd.to_datetime(df['date'])
-        df['ret'] = df['close'].pct_change()
-        bench_returns.append(df.set_index('date')['ret'])
-    bench_returns = pd.concat(bench_returns, axis=1).mean(axis=1)
-    
-    # 计算绩效
-    cost = 0.001
-    # 假设组合调仓次数为各标的调仓次数之和的一半（近似）
-    # 简单起见，直接用组合收益率计算，忽略调仓成本
+
+    # 等权组合
+    port_returns = pd.concat(all_returns, axis=1, keys=valid_codes).mean(axis=1)
+    bench_returns = pd.concat(bench_returns_list, axis=1, keys=valid_codes).mean(axis=1)
+
+    # 绩效
     cum_strategy = (1 + port_returns.fillna(0)).cumprod()
     cum_bench = (1 + bench_returns.fillna(0)).cumprod()
-    
+
     total = cum_strategy.iloc[-1] - 1
     market = cum_bench.iloc[-1] - 1
     std = port_returns.std()
     sharpe = (np.sqrt(252) * port_returns.mean() / std) if std > 1e-12 else 0.0
     mdd = (cum_strategy / cum_strategy.cummax() - 1).min()
-    
+
     print(f"\n=== 多标的组合回测 {start_date[:4]}-{end_date[:4]} ===")
-    print(f"标的数: {len(names)}")
+    print(f"标的数: {len(valid_codes)}")
     print(f"组合收益: {total:.2%} | 等权持有: {market:.2%} | 超额: {total-market:.2%}")
     print(f"夏普: {sharpe:.2f} | 回撤: {mdd:.2%}")
     print("-" * 70)
