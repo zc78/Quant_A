@@ -2,7 +2,6 @@ import pandas as pd
 import numpy as np
 from data_source import get_daily, get_index_daily
 
-
 def calculate_adx(df, period=14):
     df = df.copy()
     df['TR'] = np.maximum(
@@ -25,7 +24,6 @@ def calculate_adx(df, period=14):
     df['ADX'] = df['DX'].ewm(alpha=1/period, adjust=False).mean()
     return df['ADX']
 
-
 def add_market_state(df, window=250):
     df = df.copy()
     df['MA250'] = df['close'].rolling(window).mean()
@@ -40,6 +38,56 @@ def add_market_state(df, window=250):
     df['market_state'] = np.select(conds, choices, default='震荡市')
     return df
 
+def _single_stock_backtest(ts_code, start_date, end_date):
+    """
+    对单个标的运行择时策略，返回每日收益率 DataFrame。
+    返回列：date, strategy_return, daily_return
+    """
+    df_stock = get_daily(ts_code=ts_code, start_date=start_date, end_date=end_date)
+    df_index = get_index_daily(ts_code="000001.SH", start_date=start_date, end_date=end_date)
+
+    df_stock['date'] = pd.to_datetime(df_stock['date'])
+    df_index['date'] = pd.to_datetime(df_index['date'])
+
+    # 大盘逐日状态
+    df_index = add_market_state(df_index)
+
+    # 个股均线
+    df_stock['MA5']   = df_stock['close'].rolling(5).mean()
+    df_stock['MA10']  = df_stock['close'].rolling(10).mean()
+    df_stock['MA60']  = df_stock['close'].rolling(60).mean()
+    df_stock['MA120'] = df_stock['close'].rolling(120).mean()
+
+    # 对齐大盘状态
+    m = df_index[['date', 'market_state']].rename(columns={'market_state': 'idx_state'})
+    df_stock = df_stock.merge(m, on='date', how='left')
+    df_stock['idx_state'] = df_stock['idx_state'].ffill().fillna('震荡市')
+
+    # 基础 0/1 信号
+    bull  = (df_stock['MA60'] > df_stock['MA120']).astype(int)
+    osc   = (df_stock['MA5']  > df_stock['MA10']).astype(int)
+    base_signal = np.select(
+        [df_stock['idx_state'] == '牛市',
+         df_stock['idx_state'] == '震荡市',
+         df_stock['idx_state'] == '熊市'],
+        [bull, osc, 0],
+        default=0
+    )
+
+    # 震荡市半仓
+    df_stock['weight'] = base_signal.astype(float)
+    half_mask = (df_stock['idx_state'] == '震荡市') & (base_signal == 1)
+    df_stock.loc[half_mask, 'weight'] = 0.5
+
+    # 收益计算
+    cost = 0.001
+    df_stock['daily_return'] = df_stock['close'].pct_change()
+    weight_change = df_stock['weight'].diff().abs()
+    df_stock['strategy_return'] = df_stock['weight'].shift(1) * df_stock['daily_return'] - weight_change * cost
+
+    # 返回所需列
+    result = df_stock[['date', 'strategy_return', 'daily_return']].copy()
+    return result
 
 def backtest_with_filter(ts_code, start_date, end_date):
     df_stock = get_daily(ts_code=ts_code, start_date=start_date, end_date=end_date)
