@@ -155,4 +155,18 @@ def backtest_portfolio(ts_codes, start_date, end_date):
     print("-" * 70)
 
 if __name__ == "__main__":
-    backtest_with_filter("600519.SH", "20200101", "20261029")
+    # 单标的测试（可选）
+    # backtest_with_filter("600519.SH", "20200101", "20261029")
+
+    # 多标的组合回测
+    codes = [
+        "600519.SH",  # 茅台
+        "000858.SZ",  # 五粮液
+        "601318.SH",  # 中国平安
+        "600036.SH",  # 招商银行
+        "000333.SZ",  # 美的集团
+        "300750.SZ",  # 宁德时代
+        "002415.SZ",  # 海康威视
+        "600276.SH",  # 恒瑞医药
+    ]
+    backtest_portfolio(codes, "20200101", "20261029")
