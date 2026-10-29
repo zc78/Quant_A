@@ -114,16 +114,32 @@ def backtest_with_filter(ts_code, start_date, end_date):
     print("-" * 70)
 
 def backtest_portfolio(ts_codes, start_date, end_date):
-    """多标的等权组合回测"""
+    """多标的等权组合回测，同时输出每个标的的单独绩效"""
     all_returns = []
     bench_returns_list = []
     valid_codes = []
+    single_results = []  # 存储每个标的的绩效
 
     for code in ts_codes:
         print(f"正在处理 {code} ...")
         try:
             result = _single_stock_backtest(code, start_date, end_date)
             if result is not None and len(result) > 0:
+                # 计算该标的单独绩效
+                cum_strat = (1 + result['strategy_return'].fillna(0)).cumprod()
+                cum_bench = (1 + result['daily_return'].fillna(0)).cumprod()
+                total_single = cum_strat.iloc[-1] - 1
+                bench_single = cum_bench.iloc[-1] - 1
+                excess_single = total_single - bench_single
+                mdd_single = (cum_strat / cum_strat.cummax() - 1).min()
+                single_results.append({
+                    'code': code,
+                    '收益': total_single,
+                    '基准': bench_single,
+                    '超额': excess_single,
+                    '回撤': mdd_single
+                })
+                # 收集组合数据
                 all_returns.append(result.set_index('date')['strategy_return'])
                 bench_returns_list.append(result.set_index('date')['daily_return'])
                 valid_codes.append(code)
@@ -134,11 +150,17 @@ def backtest_portfolio(ts_codes, start_date, end_date):
         print("没有成功回测的标的")
         return
 
+    # 打印每个标的的绩效
+    print("\n=== 各标的单独绩效 ===")
+    print(f"{'代码':<12} {'收益':>8} {'基准':>8} {'超额':>8} {'回撤':>8}")
+    print("-" * 50)
+    for s in single_results:
+        print(f"{s['code']:<12} {s['收益']:>7.2%} {s['基准']:>7.2%} {s['超额']:>7.2%} {s['回撤']:>7.2%}")
+
     # 等权组合
     port_returns = pd.concat(all_returns, axis=1, keys=valid_codes).mean(axis=1)
     bench_returns = pd.concat(bench_returns_list, axis=1, keys=valid_codes).mean(axis=1)
 
-    # 绩效
     cum_strategy = (1 + port_returns.fillna(0)).cumprod()
     cum_bench = (1 + bench_returns.fillna(0)).cumprod()
 
@@ -152,7 +174,7 @@ def backtest_portfolio(ts_codes, start_date, end_date):
     print(f"标的数: {len(valid_codes)}")
     print(f"组合收益: {total:.2%} | 等权持有: {market:.2%} | 超额: {total-market:.2%}")
     print(f"夏普: {sharpe:.2f} | 回撤: {mdd:.2%}")
-    print("-" * 70)
+    print("-" * 90)
 
 if __name__ == "__main__":
     # 单标的测试（可选）
