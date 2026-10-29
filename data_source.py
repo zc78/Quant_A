@@ -4,7 +4,7 @@
 功能：拉取 A 股日线行情、清洗、存储为 CSV
 """
 
-import os
+import os, time
 import pandas as pd
 import tushare as ts
 
@@ -193,6 +193,81 @@ def get_fund_daily(ts_code: str = "510300.SH",
     df = df[[c for c in keep if c in df.columns]]
     df.to_csv(cache_file, index=False)
     return df
+
+# ========== 日频基本面数据（估值/流动性/规模）==========
+
+def get_daily_basic(ts_code: str = None,
+                    trade_date: str = None,
+                    start_date: str = None,
+                    end_date: str = None,
+                    use_cache: bool = True) -> pd.DataFrame:
+    """
+    获取日频基本面数据（pro.daily_basic）
+    包含字段：pe_ttm, pb, ps_ttm, dv_ratio, turnover_rate, circ_mv 等
+
+    两种用法：
+      1. 按股票：ts_code="600519.SH", start_date, end_date
+      2 按日期：trade_date="20261029"（全市场快照）
+
+    返回 DataFrame，带 date 列。
+    """
+    # 按股票拉取（我们主要用这种）
+    if ts_code is not None:
+        if start_date is None:
+            start_date = "20180101"
+        if end_date is None:
+            end_date = pd.Timestamp.today().strftime("%Y%m%d")
+
+        cache_file = os.path.join(CACHE_DIR, f"basic_{ts_code}_{start_date}_{end_date}.csv")
+        if use_cache and os.path.exists(cache_file):
+            df = pd.read_csv(cache_file)
+            df["date"] = pd.to_datetime(df["date"])
+            return df.sort_values("date").reset_index(drop=True)
+
+        # 分片拉取（按年，防限流）
+        start_y = int(start_date[:4])
+        end_y = int(end_date[:4])
+        frames = []
+        for y in range(start_y, end_y + 1):
+            sd = f"{y}0101" if y != start_y else start_date
+            ed = f"{y}1231" if y != end_y else end_date
+            try:
+                chunk = pro.daily_basic(ts_code=ts_code, start_date=sd, end_date=ed)
+            except Exception as e:
+                msg = str(e)
+                if "频率超限" in msg or "权限" in msg:
+                    raise RuntimeError(f"⛔ daily_basic 限流/无权限：{msg}")
+                raise
+            if chunk is not None and not chunk.empty:
+                frames.append(chunk)
+                time.sleep(0.3)
+
+        if not frames:
+            raise ValueError(f"未获取到 daily_basic：{ts_code}")
+
+        df = pd.concat(frames, ignore_index=True)
+        df = df.rename(columns={"trade_date": "date"})
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.sort_values("date").reset_index(drop=True)
+        df.to_csv(cache_file, index=False)
+        return df
+
+    # 按日期拉全市场（备用）
+    elif trade_date is not None:
+        cache_file = os.path.join(CACHE_DIR, f"basic_all_{trade_date}.csv")
+        if use_cache and os.path.exists(cache_file):
+            return pd.read_csv(cache_file)
+
+        df = pro.daily_basic(trade_date=trade_date)
+        if df is None or df.empty:
+            raise ValueError(f"未获取到全市场 basic：{trade_date}")
+        df = df.rename(columns={"trade_date": "date"})
+        df["date"] = pd.to_datetime(df["date"])
+        df.to_csv(cache_file, index=False)
+        return df
+
+    else:
+        raise ValueError("请至少提供 ts_code 或 trade_date 之一")
 
 
 # ========== 测试 ==========
