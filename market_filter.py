@@ -113,19 +113,62 @@ def backtest_with_filter(ts_code, start_date, end_date):
     print(f"夏普: {sharpe:.2f} | 回撤: {mdd:.2%}")
     print("-" * 70)
 
-def backtest_portfolio(ts_codes, start_date, end_date):
-    """多标的等权组合回测，同时输出每个标的的单独绩效"""
-    all_returns = []
-    bench_returns_list = []
-    valid_codes = []
-    single_results = []  # 存储每个标的的绩效
+def backtest_portfolio(ts_codes, start_date, end_date, corr_threshold=0.5, corr_window=250):
+    """
+    多标的组合回测，带相关性筛选。
+    只保留与上证指数相关系数 > corr_threshold 的标的。
+    """
+    # 获取上证指数日线
+    df_index = get_index_daily(ts_code="000001.SH", start_date=start_date, end_date=end_date)
+    df_index['date'] = pd.to_datetime(df_index['date'])
+    idx_close = df_index.set_index('date')['close']
+
+    # 第一步：计算每只标的与大盘的相关系数
+    print("=== 相关性筛选 ===")
+    correlations = {}
+    valid_data = {}
 
     for code in ts_codes:
-        print(f"正在处理 {code} ...")
+        try:
+            df = get_daily(ts_code=code, start_date=start_date, end_date=end_date)
+            df['date'] = pd.to_datetime(df['date'])
+            df = df.set_index('date')['close']
+            # 对齐日期并计算滚动相关系数
+            merged = pd.DataFrame({'stock': df, 'index': idx_close}).dropna()
+            if len(merged) < corr_window:
+                print(f"  {code}: 数据不足{corr_window}日，跳过")
+                continue
+            # 250日滚动相关系数
+            rolling_corr = merged['stock'].rolling(corr_window).corr(merged['index'])
+            final_corr = rolling_corr.iloc[-1]
+            correlations[code] = final_corr
+            valid_data[code] = df
+            print(f"  {code}: 250日相关系数 = {final_corr:.3f}")
+        except Exception as e:
+            print(f"  {code}: 失败 - {e}")
+
+    # 筛选相关系数 > 阈值的标的
+    selected = [code for code, corr in correlations.items() if corr > corr_threshold]
+    rejected = [code for code, corr in correlations.items() if corr <= corr_threshold]
+
+    print(f"\n筛选阈值: {corr_threshold}")
+    print(f"入选({len(selected)}只): {selected}")
+    print(f"剔除({len(rejected)}只): {rejected}")
+
+    if not selected:
+        print("没有标的通过相关性筛选")
+        return
+
+    # 第二步：对入选标的执行择时组合回测
+    print(f"\n=== 对入选标的执行择时回测 ===")
+    all_returns = []
+    bench_returns_list = []
+    single_results = []
+
+    for code in selected:
         try:
             result = _single_stock_backtest(code, start_date, end_date)
             if result is not None and len(result) > 0:
-                # 计算该标的单独绩效
                 cum_strat = (1 + result['strategy_return'].fillna(0)).cumprod()
                 cum_bench = (1 + result['daily_return'].fillna(0)).cumprod()
                 total_single = cum_strat.iloc[-1] - 1
@@ -134,15 +177,14 @@ def backtest_portfolio(ts_codes, start_date, end_date):
                 mdd_single = (cum_strat / cum_strat.cummax() - 1).min()
                 single_results.append({
                     'code': code,
+                    '相关系数': correlations[code],
                     '收益': total_single,
                     '基准': bench_single,
                     '超额': excess_single,
                     '回撤': mdd_single
                 })
-                # 收集组合数据
                 all_returns.append(result.set_index('date')['strategy_return'])
                 bench_returns_list.append(result.set_index('date')['daily_return'])
-                valid_codes.append(code)
         except Exception as e:
             print(f"  {code} 处理失败: {e}")
 
@@ -150,16 +192,15 @@ def backtest_portfolio(ts_codes, start_date, end_date):
         print("没有成功回测的标的")
         return
 
-    # 打印每个标的的绩效
-    print("\n=== 各标的单独绩效 ===")
-    print(f"{'代码':<12} {'收益':>8} {'基准':>8} {'超额':>8} {'回撤':>8}")
-    print("-" * 50)
+    # 打印各标的绩效
+    print(f"\n{'代码':<12} {'相关系数':>8} {'收益':>8} {'基准':>8} {'超额':>8} {'回撤':>8}")
+    print("-" * 60)
     for s in single_results:
-        print(f"{s['code']:<12} {s['收益']:>7.2%} {s['基准']:>7.2%} {s['超额']:>7.2%} {s['回撤']:>7.2%}")
+        print(f"{s['code']:<12} {s['相关系数']:>8.3f} {s['收益']:>7.2%} {s['基准']:>7.2%} {s['超额']:>7.2%} {s['回撤']:>7.2%}")
 
     # 等权组合
-    port_returns = pd.concat(all_returns, axis=1, keys=valid_codes).mean(axis=1)
-    bench_returns = pd.concat(bench_returns_list, axis=1, keys=valid_codes).mean(axis=1)
+    port_returns = pd.concat(all_returns, axis=1).mean(axis=1)
+    bench_returns = pd.concat(bench_returns_list, axis=1).mean(axis=1)
 
     cum_strategy = (1 + port_returns.fillna(0)).cumprod()
     cum_bench = (1 + bench_returns.fillna(0)).cumprod()
@@ -170,8 +211,8 @@ def backtest_portfolio(ts_codes, start_date, end_date):
     sharpe = (np.sqrt(252) * port_returns.mean() / std) if std > 1e-12 else 0.0
     mdd = (cum_strategy / cum_strategy.cummax() - 1).min()
 
-    print(f"\n=== 多标的组合回测 {start_date[:4]}-{end_date[:4]} ===")
-    print(f"标的数: {len(valid_codes)}")
+    print(f"\n=== 组合回测结果 {start_date[:4]}-{end_date[:4]} ===")
+    print(f"入选标的数: {len(selected)}")
     print(f"组合收益: {total:.2%} | 等权持有: {market:.2%} | 超额: {total-market:.2%}")
     print(f"夏普: {sharpe:.2f} | 回撤: {mdd:.2%}")
     print("-" * 90)
@@ -182,13 +223,10 @@ if __name__ == "__main__":
 
     # 多标的组合回测
     codes = [
-        "600519.SH",  # 茅台
-        "000858.SZ",  # 五粮液
-        "601318.SH",  # 中国平安
-        "600036.SH",  # 招商银行
-        "000333.SZ",  # 美的集团
-        "300750.SZ",  # 宁德时代
-        "002415.SZ",  # 海康威视
-        "600276.SH",  # 恒瑞医药
+    "600519.SH",  # 茅台
+    "000858.SZ",  # 五粮液
+    "601318.SH",  # 中国平安
+    "600036.SH",  # 招商银行
+    "600276.SH",  # 恒瑞医药
     ]
     backtest_portfolio(codes, "20200101", "20261029")
