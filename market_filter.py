@@ -217,20 +217,185 @@ def backtest_portfolio(ts_codes, start_date, end_date, corr_threshold=0.5, corr_
     print(f"夏普: {sharpe:.2f} | 回撤: {mdd:.2%}")
     print("-" * 90)
 
+def backtest_portfolio_by_vol(ts_codes, start_date, end_date, vol_threshold=0.30):
+    """
+    按年化波动率筛选标的。
+    只保留年化波动率 > vol_threshold 的标的。
+    """
+    print("=== 波动率筛选 ===")
+    vols = {}
+    valid_codes = []
+
+    for code in ts_codes:
+        try:
+            df = get_daily(ts_code=code, start_date=start_date, end_date=end_date)
+            df['date'] = pd.to_datetime(df['date'])
+            ret = df['close'].pct_change().dropna()
+            vol = ret.std() * np.sqrt(252)
+            vols[code] = vol
+            valid_codes.append(code)
+            print(f"  {code}: 年化波动率 = {vol:.2%}")
+        except Exception as e:
+            print(f"  {code}: 失败 - {e}")
+
+    selected = [code for code in valid_codes if vols[code] > vol_threshold]
+    rejected = [code for code in valid_codes if vols[code] <= vol_threshold]
+
+    print(f"\n筛选阈值: {vol_threshold:.0%}")
+    print(f"入选({len(selected)}只): {selected}")
+    print(f"剔除({len(rejected)}只): {rejected}")
+
+    if not selected:
+        print("没有标的通过筛选")
+        return
+
+    # 对入选标的执行回测
+    all_returns = []
+    bench_returns_list = []
+    single_results = []
+
+    for code in selected:
+        try:
+            result = _single_stock_backtest(code, start_date, end_date)
+            if result is not None and len(result) > 0:
+                cum_strat = (1 + result['strategy_return'].fillna(0)).cumprod()
+                cum_bench = (1 + result['daily_return'].fillna(0)).cumprod()
+                total_single = cum_strat.iloc[-1] - 1
+                bench_single = cum_bench.iloc[-1] - 1
+                excess_single = total_single - bench_single
+                mdd_single = (cum_strat / cum_strat.cummax() - 1).min()
+                single_results.append({
+                    'code': code,
+                    '波动率': vols[code],
+                    '收益': total_single,
+                    '基准': bench_single,
+                    '超额': excess_single,
+                    '回撤': mdd_single
+                })
+                all_returns.append(result.set_index('date')['strategy_return'])
+                bench_returns_list.append(result.set_index('date')['daily_return'])
+        except Exception as e:
+            print(f"  {code} 处理失败: {e}")
+
+    print(f"\n{'代码':<12} {'波动率':>8} {'收益':>8} {'基准':>8} {'超额':>8} {'回撤':>8}")
+    print("-" * 60)
+    for s in single_results:
+        print(f"{s['code']:<12} {s['波动率']:>7.2%} {s['收益']:>7.2%} {s['基准']:>7.2%} {s['超额']:>7.2%} {s['回撤']:>7.2%}")
+
+    port_returns = pd.concat(all_returns, axis=1).mean(axis=1)
+    bench_returns = pd.concat(bench_returns_list, axis=1).mean(axis=1)
+    cum_strategy = (1 + port_returns.fillna(0)).cumprod()
+    cum_bench = (1 + bench_returns.fillna(0)).cumprod()
+
+    total = cum_strategy.iloc[-1] - 1
+    market = cum_bench.iloc[-1] - 1
+    std = port_returns.std()
+    sharpe = (np.sqrt(252) * port_returns.mean() / std) if std > 1e-12 else 0.0
+    mdd = (cum_strategy / cum_strategy.cummax() - 1).min()
+
+    print(f"\n=== 波动率筛选组合 {start_date[:4]}-{end_date[:4]} ===")
+    print(f"入选标的数: {len(selected)}")
+    print(f"组合收益: {total:.2%} | 等权持有: {market:.2%} | 超额: {total-market:.2%}")
+    print(f"夏普: {sharpe:.2f} | 回撤: {mdd:.2%}")
+    print("-" * 90)
+
+def backtest_all_hs300(start_date, end_date, top_n=50):
+    """
+    对沪深300前 top_n 只成分股执行择时回测，统计超额分布。
+    """
+    # 沪深300成分股列表（前50只，可自行扩展）
+    hs300_sample = [
+        "600519.SH", "000858.SZ", "601318.SH", "600036.SH", "000333.SZ",
+        "300750.SZ", "002415.SZ", "600276.SH", "000651.SZ", "600887.SH",
+        "000568.SZ", "601988.SH", "601398.SH", "600000.SH", "601166.SH",
+        "000002.SZ", "600030.SH", "600837.SH", "601211.SH", "000776.SZ",
+        "002142.SZ", "601668.SH", "600585.SH", "000786.SZ", "601800.SH",
+        "600028.SH", "601857.SH", "600019.SH", "000898.SZ", "600009.SH",
+        "601006.SH", "600018.SH", "000338.SZ", "601633.SH", "002594.SZ",
+        "600104.SH", "601238.SH", "601360.SH", "600050.SH", "000063.SZ",
+        "002230.SZ", "300059.SZ", "600570.SH", "002241.SZ", "000725.SZ",
+        "601088.SH", "600900.SH", "601225.SH", "600011.SH", "601985.SH",
+    ][:top_n]
+
+    results = []
+    failed = 0
+
+    for code in hs300_sample:
+        try:
+            result = _single_stock_backtest(code, start_date, end_date)
+            if result is not None and len(result) > 0:
+                cum_strat = (1 + result['strategy_return'].fillna(0)).cumprod()
+                cum_bench = (1 + result['daily_return'].fillna(0)).cumprod()
+                total_single = cum_strat.iloc[-1] - 1
+                bench_single = cum_bench.iloc[-1] - 1
+                excess_single = total_single - bench_single
+                mdd_single = (cum_strat / cum_strat.cummax() - 1).min()
+                results.append({
+                    'code': code,
+                    '收益': total_single,
+                    '基准': bench_single,
+                    '超额': excess_single,
+                    '回撤': mdd_single
+                })
+        except Exception as e:
+            failed += 1
+
+    if not results:
+        print("没有成功回测的标的")
+        return
+
+    df_result = pd.DataFrame(results)
+
+    print(f"\n=== 沪深300成分股全样本测试 ({start_date[:4]}-{end_date[:4]}) ===")
+    print(f"成功: {len(results)} 只 | 失败: {failed} 只")
+    print(f"\n超额统计:")
+    print(f"  平均超额: {df_result['超额'].mean():.2%}")
+    print(f"  中位数超额: {df_result['超额'].median():.2%}")
+    print(f"  超额为正的比例: {(df_result['超额'] > 0).sum() / len(df_result):.1%}")
+    print(f"  超额>10%的比例: {(df_result['超额'] > 0.10).sum() / len(df_result):.1%}")
+    print(f"\n前10名（超额最高）:")
+    print(df_result.nlargest(10, '超额')[['code','收益','基准','超额','回撤']].to_string(index=False))
+    print(f"\n后10名（超额最低）:")
+    print(df_result.nsmallest(10, '超额')[['code','收益','基准','超额','回撤']].to_string(index=False))
+
+    # 等权组合
+    all_returns = []
+    bench_returns_list = []
+    for code in df_result['code'].tolist():
+        r = _single_stock_backtest(code, start_date, end_date)
+        all_returns.append(r.set_index('date')['strategy_return'])
+        bench_returns_list.append(r.set_index('date')['daily_return'])
+
+    port_returns = pd.concat(all_returns, axis=1).mean(axis=1)
+    bench_returns = pd.concat(bench_returns_list, axis=1).mean(axis=1)
+    cum_strategy = (1 + port_returns.fillna(0)).cumprod()
+    cum_bench = (1 + bench_returns.fillna(0)).cumprod()
+
+    total = cum_strategy.iloc[-1] - 1
+    market = cum_bench.iloc[-1] - 1
+    std = port_returns.std()
+    sharpe = (np.sqrt(252) * port_returns.mean() / std) if std > 1e-12 else 0.0
+    mdd = (cum_strategy / cum_strategy.cummax() - 1).min()
+
+    print(f"\n=== 全样本等权组合 ===")
+    print(f"组合收益: {total:.2%} | 等权持有: {market:.2%} | 超额: {total-market:.2%}")
+    print(f"夏普: {sharpe:.2f} | 回撤: {mdd:.2%}")
+    print("-" * 90)
+
 if __name__ == "__main__":
-    # 单标的测试（可选）
-    # backtest_with_filter("600519.SH", "20200101", "20261029")
-
-    # 多标的组合回测
-
     codes = [
-        "600519.SH",  # 茅台
-        "000858.SZ",  # 五粮液
-        "601318.SH",  # 中国平安
-        "600036.SH",  # 招商银行
-        "000333.SZ",  # 美的集团
-        "300750.SZ",  # 宁德时代
-        "002415.SZ",  # 海康威视
-        "600276.SH",  # 恒瑞医药
+        "600519.SH", "000858.SZ", "601318.SH", "600036.SH",
+        "000333.SZ", "300750.SZ", "002415.SZ", "600276.SH",
     ]
-    backtest_portfolio(codes, "20200101", "20261029", corr_threshold=0.5)
+
+    # 方案 A：波动率筛选
+    print("\n" + "="*90)
+    print("方案 A：波动率筛选")
+    print("="*90)
+    backtest_portfolio_by_vol(codes, "20200101", "20261029", vol_threshold=0.30)
+
+    # 方案 B：全样本测试
+    print("\n" + "="*90)
+    print("方案 B：沪深300全样本测试")
+    print("="*90)
+    backtest_all_hs300("20200101", "20261029", top_n=20)  # 先跑20只，避免限流
