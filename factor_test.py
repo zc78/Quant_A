@@ -112,8 +112,8 @@ if __name__ == "__main__":
     close_data = {}
     for code in codes:
         df = get_daily(code, start, end)
-        df['date'] = pd.to_datetime(df['date'])
-        close_data[code] = df.set_index('date')['close']
+        df['trade_date'] = pd.to_datetime(df['trade_date'])
+        close_data[code] = df.set_index('trade_date')['close']
     close_df = pd.DataFrame(close_data)
 
     # 3. 测试多个预测周期

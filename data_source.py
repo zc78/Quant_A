@@ -29,6 +29,9 @@ else:
 
 pro = ts.pro_api()
 
+# 代理中转用
+pro._DataApi__http_url = "https://tl.kaixin8.top/tushare/sdk"
+
 # ========== 缓存配置 ==========
 CACHE_ROOT = Path('./data_cache')  # 缓存根目录
 

@@ -5,7 +5,6 @@
 
 因子来源：
   - 量价因子：日线行情本地计算
-  - 估值/流动性：daily_basic
   - 质量/成长：fina_indicator（按报告期对齐到交易日）
 """
 import numpy as np
@@ -40,6 +39,8 @@ def build_factor_panel(ts_codes, start_date, end_date):
 
     # 1. 交易日历（统一转为 datetime64[ns]）
     cal = get_trade_calendar(start_date, end_date)
+    if cal.empty or 'cal_date' not in cal.columns:
+        raise RuntimeError("无法获取交易日历数据，请确保网络畅通或缓存存在。")
     cal['cal_date_dt'] = pd.to_datetime(cal['cal_date'].astype(str))
     trade_dates = cal[cal['is_open'] == 1]['cal_date_dt']
     trade_dates = trade_dates[(trade_dates >= pd.to_datetime(start_date)) &
@@ -53,11 +54,13 @@ def build_factor_panel(ts_codes, start_date, end_date):
     for code in ts_codes:
         df = get_daily(code, start_date, end_date)
         if df.empty:
+            print(f"[WARN] 跳过 {code}（无日线数据）")
             continue
-        df['date'] = pd.to_datetime(df['date'])
-        df = df.set_index('date')
+        # 修正字段名：trade_date 和 vol
+        df['trade_date'] = pd.to_datetime(df['trade_date'])
+        df = df.set_index('trade_date')
         close_panel[code] = df['close'].reindex(trade_dates)
-        volume_panel[code] = df['volume'].reindex(trade_dates)
+        volume_panel[code] = df['vol'].reindex(trade_dates)
 
     close_df = pd.DataFrame(close_panel)
     volume_df = pd.DataFrame(volume_panel)
@@ -75,10 +78,8 @@ def build_factor_panel(ts_codes, start_date, end_date):
     volume_ma20 = volume_df.rolling(20).mean()
     volume_ratio = (volume_ma5 / volume_ma20).shift(1)
 
-    # 存储所有因子（全局 + 个股）
+    # 存储所有因子
     all_factors = {}
-
-    # 全局因子直接存入
     all_factors['momentum_20'] = mom20
     all_factors['momentum_60'] = mom60
     all_factors['volatility_20'] = vol20
@@ -138,10 +139,6 @@ def factor_direction():
         'momentum_60': 0,
         'volatility_20': -1,
         'volume_ratio': 0,
-        'pe_ttm': -1,
-        'pb': -1,
-        'turnover_rate': 0,
-        'circ_mv': 0,
         'roe': 1,
         'roe_waa': 1,
         'grossprofit_margin': 1,
