@@ -153,28 +153,27 @@ def get_daily_basic(code, start, end):
     return pd.DataFrame()
 
 
-def get_fina_indicator(code, start, end):
-    """
-    获取财务指标数据（roe, roe_waa, grossprofit_margin, netprofit_yoy, or_yoy 等）
-    """
+def get_fina_indicator(code, start, end, max_retries=3):
     cache_file = _cache_path('get_fina_indicator', code, start=start, end=end)
-
     df = _read_cache(cache_file)
     if df is not None:
         return df
-
-    try:
-        df = pro.fina_indicator(ts_code=code, start_date=start, end_date=end)
-        if df is not None and not df.empty:
-            _write_cache(df, cache_file)
-            return df
-    except Exception as e:
-        print(f"[WARN] 网络获取失败 (get_fina_indicator {code}): {e}")
-
-    df = _read_cache(cache_file)
-    if df is not None:
-        print(f"[INFO] 使用缓存数据 (get_fina_indicator {code})")
-        return df
+    for attempt in range(max_retries):
+        try:
+            df = pro.fina_indicator(ts_code=code, start_date=start, end_date=end)
+            if df is not None and not df.empty:
+                _write_cache(df, cache_file)
+                return df
+        except Exception as e:
+            if attempt < max_retries - 1:
+                wait = 2 ** attempt
+                print(f"[WARN] 重试 {code} ({attempt+1}/{max_retries}) 等待 {wait}s: {str(e)[:60]}")
+                time.sleep(wait)
+            else:
+                print(f"[WARN] 网络获取失败 (get_fina_indicator {code}): {e}")
+    # 回退到缓存（如果有旧缓存）
+    old_cache = _read_cache(cache_file)
+    return old_cache
 
     print(f"[ERROR] 无法获取 {code} 财务指标数据（无网络且无缓存）")
     return pd.DataFrame()

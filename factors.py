@@ -100,7 +100,7 @@ def build_factor_panel(ts_codes, start_date, end_date):
             df = df.set_index('ann_date_dt')
             if code not in stock_factors:
                 stock_factors[code] = {}
-            for col in ['roe', 'roe_waa', 'grossprofit_margin', 'netprofit_yoy', 'or_yoy']:
+            for col in ['roe', 'roe_waa', 'gross_margin', 'netprofit_yoy', 'or_yoy']:
                 if col in df.columns:
                     stock_factors[code][col] = df[col].reindex(trade_dates).ffill()
         except Exception as e:
@@ -114,7 +114,7 @@ def build_factor_panel(ts_codes, start_date, end_date):
             result[name] = all_factors[name]
 
     # 个股因子（仅财务因子）
-    for name in ['roe', 'roe_waa', 'grossprofit_margin', 'netprofit_yoy', 'or_yoy']:
+    for name in ['roe', 'roe_waa', 'gross_margin', 'netprofit_yoy', 'or_yoy']:
         cols = {}
         for code in ts_codes:
             if code in stock_factors and name in stock_factors[code]:
@@ -141,7 +141,7 @@ def factor_direction():
         'volume_ratio': 0,
         'roe': 1,
         'roe_waa': 1,
-        'grossprofit_margin': 1,
+        'gross_margin': 1,
         'netprofit_yoy': 1,
         'or_yoy': 1,
     }
