@@ -20,7 +20,7 @@ def zscore(frame):
     """截面 Z-score 标准化"""
     mu = frame.mean(axis=1)
     sigma = frame.std(axis=1)
-    return (frame.sub(mu, axis=0) / sigma.replace(0, np.nan), axis=0)
+    return (frame.sub(mu, axis=0) / sigma.replace(0, np.nan))
 
 
 def neutralize_market_cap(frame, log_mktcap):
@@ -45,6 +45,9 @@ def neutralize_market_cap(frame, log_mktcap):
         full = pd.Series(np.nan, index=y.index)
         full[r.index] = r
         resid[date] = full
+        
+        print(f"rank type: {type(rank)}, shape: {rank.shape if hasattr(rank, 'shape') else 'N/A'}")
+        print(rank.head(10) if hasattr(rank, 'head') else rank)
     return pd.DataFrame(resid).T
 
 

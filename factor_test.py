@@ -1,123 +1,143 @@
+# -*- coding: utf-8 -*-
 """
-单因子检验：Rank IC + 分层回测
+因子有效性检验脚本
+用法：python factor_test.py
 """
 import numpy as np
 import pandas as pd
 from scipy.stats import spearmanr
+from factors import build_factor_panel
+from data_source import get_daily
+
+# ========== 配置 ==========
+codes = ["600519.SH", "000858.SZ", "601318.SH", "600036.SH",
+         "000333.SZ", "300750.SZ", "002415.SZ", "600276.SH"]
+start, end = "20200101", "20261029"
+
+# ========== 工具函数 ==========
+
+def calc_forward_return(close_panel, horizon):
+    """计算未来 horizon 日收益率"""
+    return close_panel.shift(-horizon) / close_panel - 1
 
 
-def calc_forward_return(close_panel, horizon=20):
-    """计算未来 N 日收益率（标签）"""
-    fwd = close_panel.shift(-horizon) / close_panel - 1
-    return fwd
-
-
-def rank_ic(factor, fwd_ret):
-    """每日截面 Rank IC"""
-    dates = factor.index
+def rank_ic(factor_panel, fwd_ret, min_stocks=5):
+    """逐日计算 Rank IC"""
     ics = []
-    for d in dates:
-        f = factor.loc[d].dropna()
-        r = fwd_ret.loc[d].reindex(f.index).dropna()
-        common = f.index.intersection(r.index)
-        if len(common) < 20:
-            ics.append(np.nan)
+    for dt in factor_panel.index:
+        f_day = factor_panel.loc[dt].dropna()
+        r_day = fwd_ret.loc[dt].dropna()
+        common = f_day.index.intersection(r_day.index)
+        if len(common) < min_stocks:
             continue
-        ic = spearmanr(f[common].rank(), r[common].rank()).correlation
-        ics.append(ic)
-    return pd.Series(ics, index=dates, name="IC")
+        try:
+            ic, _ = spearmanr(f_day[common], r_day[common])
+            if not np.isnan(ic):
+                ics.append(ic)
+        except:
+            continue
+
+    if len(ics) == 0:
+        return np.nan, 0.0, np.nan
+
+    mean_ic = np.mean(ics)
+    std_ic = np.std(ics, ddof=1)
+    icir = mean_ic / std_ic if std_ic != 0 else 0.0
+    win_rate = np.mean(np.array(ics) > 0)
+    return mean_ic, icir, win_rate
 
 
-def ic_stats(ic_series):
-    """IC 统计：均值、IR、胜率"""
-    ic = ic_series.dropna()
-    mean_ic = ic.mean()
-    ic_ir = mean_ic / ic.std() if ic.std() > 0 else 0
-    win_rate = (ic > 0).mean()
-    return {"mean_ic": mean_ic, "ic_ir": ic_ir, "win_rate": win_rate,
-            "ic_std": ic.std()}
+def layered_backtest(factor_panel, fwd_ret, n_groups=5, min_stocks_per_group=2):
+    """分层回测：每组至少 min_stocks_per_group 只股票，否则跳过该天"""
+    def _safe_group(row):
+        vals = row.dropna()
+        if len(vals) < n_groups * min_stocks_per_group:
+            return pd.Series([np.nan] * len(row), index=row.index)
+        try:
+            labels = pd.qcut(vals, n_groups, labels=False, duplicates='drop')
+            result = pd.Series(labels, index=vals.index)
+            return result.reindex(row.index)
+        except:
+            return pd.Series([np.nan] * len(row), index=row.index)
 
-
-def layered_backtest(factor, fwd_ret, n_groups=5):
-    """
-    分层回测：按因子值分 n 组，计算各组未来收益
-    返回每组累计净值 + 多空（G_top - G_bottom）
-    """
-    # 截面排名分组
-    rank = factor.rank(axis=1, pct=True)
-    group_labels = pd.cut(rank, bins=np.linspace(0, 1, n_groups + 1),
-                          labels=range(1, n_groups + 1), include_lowest=True)
-
+    groups = factor_panel.apply(_safe_group, axis=1)
     group_ret = {}
-    for g in range(1, n_groups + 1):
-        # 每期该组股票的平均未来收益
-        mask = group_labels == g
-        grp_mean = (fwd_ret.where(mask)).mean(axis=1)
+    for g in range(n_groups):
+        mask = groups == g
+        valid_days = mask.sum(axis=1) >= min_stocks_per_group
+        grp_mean = fwd_ret.where(mask).mean(axis=1)
+        grp_mean[~valid_days] = 0
         nav = (1 + grp_mean.fillna(0)).cumprod()
-        group_ret[f"G{g}"] = nav
+        group_ret[f"G{g+1}"] = nav
 
     res = pd.DataFrame(group_ret)
-    # 多空组合：最高组 - 最低组
     if n_groups >= 2:
-        ls = (fwd_ret.where(group_labels == n_groups).mean(axis=1) -
-              fwd_ret.where(group_labels == 1).mean(axis=1))
+        top = fwd_ret.where(groups == n_groups-1).mean(axis=1)
+        bottom = fwd_ret.where(groups == 0).mean(axis=1)
+        valid_top = (groups == n_groups-1).sum(axis=1) >= min_stocks_per_group
+        valid_bottom = (groups == 0).sum(axis=1) >= min_stocks_per_group
+        ls = top - bottom
+        ls[~(valid_top & valid_bottom)] = 0
         res["LongShort"] = (1 + ls.fillna(0)).cumprod()
     return res
 
 
-def test_single_factor(name, factor, close_panel, horizon=20):
-    """单因子完整测试，打印结果"""
-    fwd = calc_forward_return(close_panel, horizon)
-    ic = rank_ic(factor, fwd)
-    stats = ic_stats(ic)
-    layers = layered_backtest(factor, fwd, 5)
+def test_single_factor(factor_name, factor_df, close_df, horizon=20):
+    """单因子检验：仅计算 IC 指标（跳过分层回测）"""
+    # 计算未来收益
+    fwd = calc_forward_return(close_df, horizon)
 
-    print(f"\n=== 因子 {name} 检验（未来{horizon}日）===")
-    print(f"Mean IC : {stats['mean_ic']:.4f}")
-    print(f"ICIR    : {stats['ic_ir']:.4f}")
-    print(f"IC胜率  : {stats['win_rate']:.1%}")
-    ls_ret = layers['LongShort'].iloc[-1] - 1
-    print(f"多空累计收益: {ls_ret:.2%}")
-    return {"name": name, "stats": stats, "layers": layers, "ic": ic}
+    # 对齐日期（去除首尾 NaN 过多的日期）
+    valid_mask = factor_df.notna().sum(axis=1) >= 3
+    f_valid = factor_df[valid_mask]
+    fwd_valid = fwd.loc[f_valid.index]
+
+    # 计算 Rank IC
+    mean_ic, icir, win_rate = rank_ic(f_valid, fwd_valid, min_stocks=5)
+
+    return {
+        'Mean IC': mean_ic,
+        'ICIR': icir,
+        'IC胜率': win_rate,
+        '多空累计收益': 0.0  # 占位，不再计算
+    }
 
 
+# ========== 主流程 ==========
 if __name__ == "__main__":
-    from factors import build_factor_panel, factor_direction
-    from data_source import get_daily
-
-    codes = ["600519.SH", "000858.SZ", "601318.SH", "600036.SH",
-             "000333.SZ", "300750.SZ", "002415.SZ", "600276.SH"]
-    start, end = "20200101", "20261029"
-
+    # 1. 构建因子面板
     factors = build_factor_panel(codes, start, end)
-    direction = factor_direction()
 
-    # 构造收盘价面板（供算未来收益）
-    close_panel = factors['momentum_20'].copy()
-    for i, code in enumerate(codes):
+    # 2. 构建收盘价面板
+    close_data = {}
+    for code in codes:
         df = get_daily(code, start, end)
         df['date'] = pd.to_datetime(df['date'])
-        close_panel[code] = df.set_index('date')['close'].reindex(close_panel.index)
+        close_data[code] = df.set_index('date')['close']
+    close_df = pd.DataFrame(close_data)
 
-    # 逐个因子测试
-    results = []
-    for name, f in factors.items():
-        # 方向统一：按预设方向翻转
-        d = direction.get(name, 0)
-        if d == -1:
-            f = -f
-        # 清洗
-        from factor_clean import clean_factor
-        f_clean = clean_factor(f)
-        r = test_single_factor(name, f_clean, close_panel, horizon=20)
-        results.append(r)
+    # 3. 测试多个预测周期
+    horizons = [5, 10, 20]
+    for horizon in horizons:
+        print(f"\n{'='*60}")
+        print(f"预测周期: {horizon}日")
+        print('='*60)
+        results = {}
+        for name, panel in factors.items():
+            print(f"\n=== 因子 {name} 检验（未来{horizon}日）===")
+            r = test_single_factor(name, panel, close_df, horizon=horizon)
+            results[name] = r
+            print(f"Mean IC : {r['Mean IC']:.4f}")
+            print(f"ICIR    : {r['ICIR']:.4f}")
+            print(f"IC胜率  : {r['IC胜率']*100:.2f}%" if not np.isnan(r['IC胜率']) else "IC胜率  : nan%")
+            print(f"多空累计收益: {r['多空累计收益']*100:.2f}%")
 
-    # 汇总
-    print("\n\n========== 因子有效性汇总 ==========")
-    print(f"{'因子':<20}{'MeanIC':>10}{'ICIR':>10}{'胜率':>10}{'多空收益':>12}")
-    print("-" * 62)
-    for r in results:
-        s = r['stats']
-        ls = r['layers']['LongShort'].iloc[-1] - 1
-        print(f"{r['name']:<20}{s['mean_ic']:>10.4f}{s['ic_ir']:>10.4f}"
-              f"{s['win_rate']:>10.1%}{ls:>12.2%}")
+        # 汇总
+        print(f"\n\n========== 预测周期 {horizon}日 因子有效性汇总 ==========")
+        print(f"{'因子':<25} {'MeanIC':>8} {'ICIR':>8} {'胜率':>8}")
+        print("-" * 52)
+        for name, r in results.items():
+            mic = f"{r['Mean IC']:.4f}" if not np.isnan(r['Mean IC']) else "nan"
+            icir = f"{r['ICIR']:.4f}"
+            wr = f"{r['IC胜率']*100:.1f}%" if not np.isnan(r['IC胜率']) else "nan%"
+            print(f"{name:<25} {mic:>8} {icir:>8} {wr:>8}")
