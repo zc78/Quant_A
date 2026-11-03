@@ -2,7 +2,7 @@
 数据校验脚本：检查接口连通性、数据完整性、字段名正确性
 """
 import pandas as pd
-from data_source import (
+from data_source_bak import (
     get_daily, get_daily_basic, get_fina_indicator,
     get_trade_calendar, clear_cache, pro
 )

@@ -88,10 +88,15 @@ def long_short_backtest(factor_df, forward_returns, top_pct=0.2):
         bottom_n = top_n
         long_stocks = f.index[:top_n]
         short_stocks = f.index[-bottom_n:]
-        ret_long = forward_returns.loc[next_dt, long_stocks].mean()
-        ret_short = forward_returns.loc[next_dt, short_stocks].mean()
+        ret_long = forward_returns.loc[next_dt, long_stocks].dropna().mean()
+        ret_short = forward_returns.loc[next_dt, short_stocks].dropna().mean()
+        # 如果任一为空，跳过该期
+        if pd.isna(ret_long) or pd.isna(ret_short):
+            continue
         portfolio_ret.append(ret_long - ret_short)
-    return pd.Series(portfolio_ret, index=dates[:-1]).cumsum()
+    if not portfolio_ret:
+        return pd.Series(dtype=float)
+    return pd.Series(portfolio_ret, index=dates[:len(portfolio_ret)]).cumsum()
 
 if __name__ == "__main__":
     # 股票池（沪深300前50只）
